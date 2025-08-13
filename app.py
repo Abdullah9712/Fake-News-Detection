@@ -11,6 +11,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CSE_ID = os.getenv("CSE_ID")
 
+
 # Load model and vectorizer:
 
 model = joblib.load("fake_news_model.pkl")
