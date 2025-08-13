@@ -28,7 +28,15 @@ TRUSTED_SOURCES = [
 
 # NLI Model for claim verification:
 
-nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
+#nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
+from transformers import pipeline
+
+nli_model = pipeline(
+    "text-classification",
+    model="facebook/bart-large-mnli",
+    device=-1,  # CPU
+    trust_remote_code=True
+)
 
 # Google Search Function:
 
