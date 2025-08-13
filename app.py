@@ -5,135 +5,111 @@ from transformers import pipeline
 from dotenv import load_dotenv
 import os
 
-# Load Environment Vars:
+# Load environment variables
 
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CSE_ID = os.getenv("CSE_ID")
 
-if not API_KEY or not CSE_ID:
-    st.error("❌ Missing API_KEY or CSE_ID in environment variables.")
-    st.stop()
-
-# Load Model & Vectorizer:
+# Load Fake News Detection model
 
 model = joblib.load("fake_news_model.pkl")
 vectorizer = joblib.load("vectorizer.pkl")
 
-# Trusted sources:
+# Load NLI Model for Fact Checking
+
+nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
+
+# Trusted news sources
 TRUSTED_SOURCES = [
-    "bbc.com", "reuters.com", "cnn.com", "aljazeera.com", "apnews.com", "theguardian.com", "nytimes.com",
-    "washingtonpost.com", "bloomberg.com", "forbes.com", "time.com", "economist.com",
-    "espn.com", "espncricinfo.com", "cricbuzz.com", "skysports.com",
-    "dawn.com", "geo.tv", "tribune.com.pk", "arynews.tv", "thenews.com.pk", "92news.tv", "dunyanews.tv",
-    "snopes.com", "factcheck.org", "politifact.com", "fullfact.org"
+    "bbc.com", "reuters.com", "apnews.com", "cnn.com", "aljazeera.com",
+    "nytimes.com", "theguardian.com", "geo.tv", "dawn.com"
 ]
 
-# NLI Model:
-nli_model = pipeline(
-    "text-classification",
-    model="facebook/bart-large-mnli",
-    device=-1
-)
+# Helper Functions
 
-# Google Search:
 
-def google_search(query):
-    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={API_KEY}&cx={CSE_ID}"
-    res = requests.get(url)
-    return res.json().get("items", [])
+def google_search(query, num_results=5):
+    """Search Google for relevant news articles from trusted sources."""
+    try:
+        url = f"https://www.googleapis.com/customsearch/v1?q={query}&cx={CSE_ID}&key={API_KEY}"
+        response = requests.get(url)
+        results = response.json()
+        articles = []
+        if "items" in results:
+            for item in results["items"]:
+                link = item["link"]
+                if any(source in link for source in TRUSTED_SOURCES):
+                    articles.append({"title": item["title"], "snippet": item["snippet"]})
+        return articles[:num_results]
+    except Exception as e:
+        st.error(f"Google Search failed: {e}")
+        return []
 
-# NLI Check:
-def check_claim_with_nli(claim, snippet):
-    if not snippet.strip():
-        return "UNSURE"
-    result = nli_model(f"{claim} </s> {snippet}", return_all_scores=True)[0]
-    label_map = {"LABEL_0": "ENTAILMENT", "LABEL_1": "NEUTRAL", "LABEL_2": "CONTRADICTION"}
-    scores = {label_map.get(item['label'], item['label']): item['score'] for item in result}
-    if scores.get("ENTAILMENT", 0) > 0.5:
-        return "AGREES"
-    elif scores.get("CONTRADICTION", 0) > 0.5:
-        return "DISAGREES"
+
+def verify_with_nli(claim, articles):
+    """Verify claim against trusted source snippets using NLI."""
+    if not articles:
+        return False, 0.0
+
+    agree_count = 0
+    total_confidence = 0
+
+    for article in articles:
+        snippet = article["snippet"]
+        result = nli_model(f"{claim} </s></s> {snippet}", truncation=True)[0]
+        if result["label"].upper() == "ENTAILMENT":
+            agree_count += 1
+            total_confidence += result["score"]
+
+    # Require at least 2 trusted articles to agree
+    avg_confidence = (total_confidence / agree_count) if agree_count > 0 else 0
+    return agree_count >= 2, avg_confidence
+
+
+def classify_news(text):
+    """Classify as True or Fake using ML model + NLI verification."""
+    # Step 1: Initial ML prediction
+    features = vectorizer.transform([text])
+    prediction = model.predict(features)[0]
+    confidence = model.predict_proba(features).max()
+
+    # Step 2: Fact-check with NLI
+    articles = google_search(text)
+    verified, nli_conf = verify_with_nli(text, articles)
+
+    if verified:
+        final_label = "True"
+        final_confidence = max(confidence, nli_conf)
     else:
-        return "UNSURE"
+        final_label = "Fake"
+        final_confidence = max(confidence, nli_conf)
 
-# Prediction:
-def blended_prediction(news_text):
-    transformed = vectorizer.transform([news_text])
-    model_proba = model.predict_proba(transformed)[0]  # [prob_fake, prob_real]
-    model_pred = 1 if model_proba[1] > 0.5 else 0
+    return final_label, final_confidence, articles
 
-    search_results = google_search(news_text)
-    agrees, disagrees, others = [], [], []
-
-    for item in search_results:
-        link = item.get("link", "")
-        snippet = item.get("snippet", "")
-        title = item.get("title", "No Title")
-
-        if any(source in link for source in TRUSTED_SOURCES):
-            credibility_check = check_claim_with_nli(news_text, snippet)
-            if credibility_check == "AGREES":
-                agrees.append((title, link, snippet))
-            elif credibility_check == "DISAGREES":
-                disagrees.append((title, link, snippet))
-        else:
-            others.append((title, link, snippet))
-
-    # NEW DECISION RULES:
-    if disagrees:  # Any trusted contradiction → FAKE
-        return "❌ FAKE", f"Contradicted by {len(disagrees)} trusted sources.", agrees, disagrees, others, model_proba
-
-    if len(agrees) >= 2:  # Multiple trusted agrees → REAL
-        return "✅ REAL", f"Confirmed by {len(agrees)} trusted sources.", agrees, disagrees, others, model_proba
-
-    # No strong external evidence → use ML confidence
-    if model_proba[1] >= 0.6:
-        return "⚠️ POSSIBLY REAL", f"Model confidence: {model_proba[1]*100:.1f}%", agrees, disagrees, others, model_proba
-    elif model_proba[1] <= 0.4:
-        return "⚠️ POSSIBLY FAKE", f"Model confidence: {model_proba[1]*100:.1f}%", agrees, disagrees, others, model_proba
-    else:
-        return "🤔 UNSURE", "Insufficient evidence from trusted sources.", agrees, disagrees, others, model_proba
+# Streamlit UI
 
 
-# Streamlit UI:
+st.set_page_config(page_title="AI Fake News Detector", layout="centered")
+st.title("📰 AI-Powered Fake News Detection")
+st.markdown("This app detects **fake news** and verifies information against **trusted news sources**.")
 
-st.set_page_config(page_title="Fake News Detector", layout="wide")
-st.title("📰 Fake News Detection")
-st.caption("Hybrid model using ML + Google Search + NLI Verification")
-
-news_input = st.text_area("Enter news headline or article:")
+user_input = st.text_area("Enter a news headline or statement:", height=100)
 
 if st.button("Check News"):
-    if news_input.strip():
-        with st.spinner("🔍 Analyzing news..."):
-            final_status, desc, agrees, disagrees, others, model_proba = blended_prediction(news_input)
+    if user_input.strip():
+        label, conf, sources = classify_news(user_input)
 
-        # Prediction
-        st.subheader("Prediction Result")
-        st.markdown(f"### {final_status}")
-        st.write(desc)
+        st.subheader("Prediction")
+        st.write(f"**Result:** {label}")
+        st.progress(conf)
+        st.write(f"Confidence: **{conf:.2f}**")
 
-        # Show model confidence
-        st.progress(model_proba[1])
-        st.write(f"Model REAL confidence: **{model_proba[1]*100:.1f}%**")
-        st.write(f"Model FAKE confidence: **{model_proba[0]*100:.1f}%**")
-
-        # Trusted sources (Agree)
-        if agrees:
-            st.success(f"✅ Trusted sources confirming the news ({len(agrees)} found):")
-            for title, link, snippet in agrees:
-                st.markdown(f"**[{title}]({link})**  \n_{snippet}_")
-
-        # Trusted sources (Disagree)
-        if disagrees:
-            st.error(f"❌ Trusted sources contradicting the news ({len(disagrees)} found):")
-            for title, link, snippet in disagrees:
-                st.markdown(f"**[{title}]({link})**  \n_{snippet}_")
-
-        # Other results
-        with st.expander("🌐 Other Google Search Results"):
-            for title, link, snippet in others:
-                st.markdown(f"**[{title}]({link})**  \n_{snippet}_")
+        st.subheader("Trusted Source Check")
+        if sources:
+            for s in sources:
+                st.write(f"- **{s['title']}** — {s['snippet']}")
+        else:
+            st.warning("No trusted sources found for verification.")
     else:
-        st.warning("Please enter some news text to check.")
+        st.warning("Please enter some text.")
