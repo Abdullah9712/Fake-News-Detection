@@ -5,20 +5,18 @@ from transformers import pipeline
 from dotenv import load_dotenv
 import os
 
-# ===============================
-# Load environment variables
-# ===============================
+# Load environment variables:
+
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CSE_ID = os.getenv("CSE_ID")
 
-# ===============================
-# Load model and vectorizer
-# ===============================
+# Load model and vectorizer:
+
 model = joblib.load("fake_news_model.pkl")
 vectorizer = joblib.load("vectorizer.pkl")
 
-# Trusted news sources
+# Trusted news sources:
 TRUSTED_SOURCES = [
     "bbc.com", "reuters.com", "cnn.com", "aljazeera.com", "apnews.com", "theguardian.com", "nytimes.com", 
     "washingtonpost.com", "bloomberg.com", "forbes.com", "time.com", "economist.com",
@@ -27,23 +25,20 @@ TRUSTED_SOURCES = [
     "snopes.com", "factcheck.org", "politifact.com", "fullfact.org"
 ]
 
-# ===============================
-# NLI Model for claim verification
-# ===============================
+# NLI Model for claim verification:
+
 nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
 
-# ===============================
-# Google Search Function
-# ===============================
+# Google Search Function:
+
 def google_search(query):
     """Search Google using Custom Search JSON API."""
     url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={API_KEY}&cx={CSE_ID}"
     res = requests.get(url)
     return res.json().get("items", [])
 
-# ===============================
-# Check if snippet agrees with claim
-# ===============================
+# Check if snippet agrees with claim:
+
 def check_claim_with_nli(claim, snippet):
     result = nli_model(f"{claim} </s> {snippet}", return_all_scores=True)[0]
     scores = {item['label']: item['score'] for item in result}
@@ -54,9 +49,8 @@ def check_claim_with_nli(claim, snippet):
     else:
         return "UNSURE"
 
-# ===============================
-# Prediction Function
-# ===============================
+# Prediction Function:
+
 def blended_prediction(news_text):
     transformed = vectorizer.transform([news_text])
     model_pred = model.predict(transformed)[0]  # 1 = REAL, 0 = FAKE
@@ -89,9 +83,8 @@ def blended_prediction(news_text):
         else:
             return "FAKE (No trusted sources found)", [], search_results
 
-# ===============================
-# Streamlit UI
-# ===============================
+# Streamlit UI:
+
 st.set_page_config(page_title="Fake News Detector", layout="wide")
 st.title("📰 Fake News Detection with Google + NLI Verification")
 
