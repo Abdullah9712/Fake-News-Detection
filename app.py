@@ -1,7 +1,7 @@
 import streamlit as st
 import joblib
 import requests
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from transformers import pipeline
 from dotenv import load_dotenv
 import os
 
@@ -11,97 +11,95 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CSE_ID = os.getenv("CSE_ID")
 
-# Load Fake News model & vectorizer
+# Load model and vectorizer
 
 model = joblib.load("fake_news_model.pkl")
 vectorizer = joblib.load("vectorizer.pkl")
 
 
-# Load Natural Language Inference (NLI) model without meta tensor issue
+# Load Natural Language Inference (NLI) model
 
-@st.cache_resource
-def load_nli_model():
-    tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-mnli")
-    model_nli = AutoModelForSequenceClassification.from_pretrained("facebook/bart-large-mnli")
-    return pipeline(
-        "text-classification",
-        model=model_nli,
-        tokenizer=tokenizer,
-        device=-1
-    )
-
-nli_model = load_nli_model()
-
+nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
 
 # Trusted news sources
 
 TRUSTED_SOURCES = [
-    "bbc.com", "cnn.com", "reuters.com", "apnews.com", "nytimes.com",
-    "theguardian.com", "forbes.com", "bloomberg.com", "aljazeera.com"
+    "bbc.com", "cnn.com", "reuters.com", "nytimes.com", "theguardian.com",
+    "aljazeera.com", "apnews.com", "npr.org", "bloomberg.com", "wsj.com"
 ]
 
+# Function to search trusted sources
 
-# Google Search API
-
-def google_search(query):
-    url = (
-        f"https://www.googleapis.com/customsearch/v1?"
-        f"q={query}&key={API_KEY}&cx={CSE_ID}"
+def search_trusted_sources(query):
+    search_url = (
+        f"https://www.googleapis.com/customsearch/v1?q={query}"
+        f"&cx={CSE_ID}&key={API_KEY}"
     )
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json().get("items", [])
-    return []
+    response = requests.get(search_url)
+    results = response.json()
+    links = []
+    if "items" in results:
+        for item in results["items"]:
+            for source in TRUSTED_SOURCES:
+                if source in item["link"]:
+                    links.append(item["link"])
+    return links
 
+# Function to verify using NLI
 
-# Classify news as Real or Fake
+def verify_with_nli(user_text):
+    links = search_trusted_sources(user_text)
 
-def classify_news(text):
-    text_vectorized = vectorizer.transform([text])
-    prediction = model.predict(text_vectorized)[0]
-    return "Real" if prediction == 1 else "Fake"
+    if not links:
+        return False, None
 
+    first_link = links[0]
+    try:
+        response = requests.get(first_link, timeout=5)
+        page_text = response.text[:1000]  # Short snippet for testing
 
-# Check against trusted sources using NLI
+        nli_result = nli_model(f"{user_text} </s> {page_text}")
 
-def verify_with_nli(news_text):
-    search_results = google_search(news_text)
-    for result in search_results:
-        link = result.get("link", "")
-        snippet = result.get("snippet", "")
+        if isinstance(nli_result, list) and len(nli_result) > 0:
+            label = nli_result[0].get("label", "").upper()
+            if label == "ENTAILMENT":
+                return True, first_link
 
-        if any(source in link for source in TRUSTED_SOURCES):
-            nli_result = nli_model(
-                {"text": snippet, "text_pair": news_text}
-            )
-            if nli_result[0]['label'] == 'ENTAILMENT':
-                return True, link
-    return False, None
+        return False, first_link
 
+    except Exception as e:
+        st.error(f"Verification error: {e}")
+        return False, first_link
 
-# Streamlit App
+# Streamlit UI
 
-st.title("📰 Fake News Detection with NLI Verification")
-st.write("Enter a news headline or paragraph to verify if it is real or fake.")
+st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="centered")
+st.title("📰 Fake News Detection App")
+st.write("This app predicts whether a news article is **Fake** or **Real** using a trained ML model and verifies it against trusted news sources.")
 
-user_input = st.text_area("Enter News Text", "")
+user_input = st.text_area("Enter the news text:", height=200)
 
-if st.button("Check News"):
-    if user_input.strip():
+if st.button("Predict"):
+    if not user_input.strip():
+        st.warning("⚠ Please enter some news text before predicting.")
+    else:
         # Step 1: ML Model Prediction
-        classification = classify_news(user_input)
+        input_vectorized = vectorizer.transform([user_input])
+        prediction = model.predict(input_vectorized)[0]
 
-        # Step 2: Verify with Trusted Sources using NLI
+        # Step 2: Verify with NLI
         verified, source_link = verify_with_nli(user_input)
 
-        # Step 3: Display Results
-        st.subheader("Prediction:")
-        st.write(f"**ML Model Output:** {classification}")
+        # Step 3: Display results
+        if prediction == 0:
+            st.error("🚨 The model predicts this news is **FAKE**.")
+        else:
+            st.success("✅ The model predicts this news is **REAL**.")
 
         if verified:
-            st.success(f"Verified ✅ - Matches trusted source: [Link]({source_link})")
+            st.info(f"📌 Verified with trusted source: [Read here]({source_link})")
         else:
-            st.warning("No matching trusted source found ❌")
-
-    else:
-        st.error("Please enter some news text before checking.")
+            if source_link:
+                st.warning(f"⚠ Could not verify. Closest match found: [Check here]({source_link})")
+            else:
+                st.warning("⚠ No related trusted sources found.")
