@@ -4,32 +4,35 @@ import requests
 from transformers import pipeline
 from dotenv import load_dotenv
 import os
+import torch
 
 # Load environment variables
-
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 CSE_ID = os.getenv("CSE_ID")
 
-# Load model and vectorizer
-
+# Load ML model and vectorizer
 model = joblib.load("fake_news_model.pkl")
 vectorizer = joblib.load("vectorizer.pkl")
 
+# Determine device: -1 = CPU, 0 = first GPU
+device = 0 if torch.cuda.is_available() else -1
 
-# Load Natural Language Inference (NLI) model
-
-nli_model = pipeline("text-classification", model="facebook/bart-large-mnli")
+# Load NLI model safely
+nli_model = pipeline(
+    "text-classification",
+    model="facebook/bart-large-mnli",  # can switch to 'bart-base-mnli' for less RAM usage
+    device=device,
+    torch_dtype=torch.float32
+)
 
 # Trusted news sources
-
 TRUSTED_SOURCES = [
     "bbc.com", "cnn.com", "reuters.com", "nytimes.com", "theguardian.com",
     "aljazeera.com", "apnews.com", "npr.org", "bloomberg.com", "wsj.com"
 ]
 
 # Function to search trusted sources
-
 def search_trusted_sources(query):
     search_url = (
         f"https://www.googleapis.com/customsearch/v1?q={query}"
@@ -46,10 +49,8 @@ def search_trusted_sources(query):
     return links
 
 # Function to verify using NLI
-
 def verify_with_nli(user_text):
     links = search_trusted_sources(user_text)
-
     if not links:
         return False, None
 
@@ -72,10 +73,12 @@ def verify_with_nli(user_text):
         return False, first_link
 
 # Streamlit UI
-
 st.set_page_config(page_title="Fake News Detector", page_icon="📰", layout="centered")
 st.title("📰 Fake News Detection App")
-st.write("This app predicts whether a news article is **Fake** or **Real** using a trained ML model and verifies it against trusted news sources.")
+st.write(
+    "This app predicts whether a news article is **Fake** or **Real** using a trained ML model "
+    "and verifies it against trusted news sources."
+)
 
 user_input = st.text_area("Enter the news text:", height=200)
 
