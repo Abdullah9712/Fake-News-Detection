@@ -28,8 +28,23 @@ nli_model = pipeline(
 
 # Trusted news sources
 TRUSTED_SOURCES = [
+    # International mainstream news
     "bbc.com", "cnn.com", "reuters.com", "nytimes.com", "theguardian.com",
-    "aljazeera.com", "apnews.com", "npr.org", "bloomberg.com", "wsj.com"
+    "aljazeera.com", "apnews.com", "npr.org", "bloomberg.com", "wsj.com",
+    "washingtonpost.com", "cnbc.com", "foxnews.com", "usatoday.com", "time.com",
+    "financialtimes.com", "abcnews.go.com", "pbs.org", "euronews.com", "cbc.ca",
+
+    # Sports news
+    "espn.com", "cricbuzz.com", "skysports.com", "sify.com/sports",
+
+    # Tech and science
+    "techcrunch.com", "wired.com", "nature.com", "sciencemag.org", "scientificamerican.com",
+
+    # Pakistani trusted sources
+    "dawn.com", "geo.tv", "express.pk", "arynews.tv", "tribune.com.pk", "thenews.com.pk",
+
+    # Others
+    "bbc.co.uk", "thehindu.com", "hindustantimes.com", "scroll.in"
 ]
 
 # Function to search trusted sources
@@ -90,15 +105,14 @@ if st.button("Predict"):
         input_vectorized = vectorizer.transform([user_input])
         prediction = model.predict(input_vectorized)[0]
 
-        # Step 2: Verify with NLI
-        verified, source_link = verify_with_nli(user_input)
-
-        # Step 3: Display results
+        # Step 2: Display ML prediction
         if prediction == 0:
-            st.error("🚨 The model predicts this news is **FAKE**.")
+            st.error("🚨 ML Model Prediction: **FAKE**")
         else:
-            st.success("✅ The model predicts this news is **REAL**.")
+            st.success("✅ ML Model Prediction: **REAL**")
 
+        # Step 3: Verify with NLI (optional, secondary info)
+        verified, source_link = verify_with_nli(user_input)
         if verified:
             st.info(f"📌 Verified with trusted source: [Read here]({source_link})")
         else:
